@@ -1,0 +1,167 @@
+Predicting the method of exercise through data from wearable devices
+============================================================
+    Author: Srinivasan Sastry    Date: April 02, 2016    
+
+#Overview
+Wearable devices such as Jawbone Up, Nike FuelBand, and Fitbit helps collect data about personal activity or exercises.This data is used extensively used for analysis or prediction. However the quality of the exercises is often not accounted.  In order to measure how well exercises are done, six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).By analyzing this data the researchers of the following paper ["Qualitative Activity Recognition of Weight Lifting Exercises"](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf), expect to detect mistakes of execution of exercises in the future.More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+The method of exercises performed is provided as a "classe" variable in the training set. The goal of this project is to predict the "classe" outcome for 20 cases in the testing set.
+
+#Data preparation and exploratory Analysis
+The data from training and testing set are loaded. The "Training" set is analyzed. The training set has 19622 observations and 160 variables in the data. There a about 100 variables that have less than 400 observations. So the training set is pruned to take in only the variables that have more than 50% observations filled. The observations are plotted to see if there is any pattern in the data set
+
+```{r,echo=FALSE,message=FALSE}
+setwd('C:/Users/sudha/Documents/Data Science/Coursera Course Materials/Machine Learrning/Assignment')
+```
+
+```{r message=FALSE}
+library(caret)
+library(dplyr)
+
+training <- read.csv('pml-training.csv')
+testing <- read.csv('pml-testing.csv')
+
+set.seed(1234)
+# Convert all blank cells to NA
+# remove the columns more than 50% NAs
+
+training[training == ""] <- NA
+t <- apply(training, 2, function(x) (length(which(is.na(x))) < 0.5*length(x)))
+training_subset <-  training[,t]
+```
+
+```{r,echo=FALSE,message=FALSE}
+op <- par(no.readonly = TRUE)
+
+library(ggplot2)
+rb_plot <- ggplot(training_subset, aes(x = X, y = roll_belt, colour = classe)) + geom_point()
+pb_plot <- ggplot(training_subset, aes(x = X, y = pitch_belt, colour = classe)) + geom_point()
+yb_plot <- ggplot(training_subset, aes(x = X, y = yaw_belt, colour = classe)) + geom_point()
+tab_plot <- ggplot(training_subset, aes(x = X, y = total_accel_belt, colour = classe)) + geom_point()
+
+require(gridExtra)
+library(grid)
+
+grid.arrange(rb_plot, pb_plot ,yb_plot,tab_plot, ncol = 2,top="Scatter Plot of Sensors by  Activty types")
+
+par(op)
+```
+
+The scatter plot above shows that the data is neatly arranged based on the classe variable. When we model based on this data (not shown),an accuracy of 1 was obtained from Random Forest. when closely observing this data and cross validating with validation data it was observed that the model predominantly was influenced by the arrangement of the data and the predicted values was determined by the variable 'X' in the training set. so in the second pass, some more variables that were either falsely contributing or not contributing to the prediction model was removed. The same is done for the testing data set.
+```{r}
+training_subset  <- training_subset[,-c(1:7)]
+training_subset$classe <- as.factor(training_subset$classe)
+testing[testing == ""] <- NA
+t1 <- apply(testing, 2, function(x) (length(which(is.na(x))) < 0.5*length(x)))
+testing_subset <- testing[,t1]
+testing_subset <- subset(testing_subset, select = -problem_id)
+```
+
+#Training and cross validation
+75% of the train set thus obtained from previous set is taken as a Training set and 25% is held out for validation. Some of the models do have a natural cross validation in them like random forest or bagging, so this step may not be necessary.
+A correlation plot was plotted (not shown) between the numeric or integer  variables to understand the relationships between these variables. 
+
+```{r}
+library(AppliedPredictiveModeling)
+inTrain = createDataPartition(training_subset$classe, p = 3/4)[[1]]
+train <- training_subset[inTrain,]
+validation <- training_subset[-inTrain,]
+```
+
+```{r,echo=FALSE,results='hide'}
+# train1 <- train[sapply(train, function(x) is.integer(x) || is.numeric(x))]
+# library(corrplot)
+# mcor <- cor(train1)
+# corrplot(mcor,  type= "upper",order="hclust", tl.col="black", tl.srt=45,tl.cex = 0.5)
+```
+
+we set it for parallel mode run for future caret machine learining algorithms.
+
+```{r,message=FALSE}
+# try rpart since data seems to be nicely classified 
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+```
+## Tree Model
+A simple tree Model was created using Rpart with classe variable against the other variables as predictors, since the data seems to be nicely classified and we can observe the accuracy of the model. 
+```{r,message=FALSE,cache=TRUE}
+# rpart Model
+set.seed(5678)
+modfit_rpart <- train(classe ~ ., method = "rpart",data = train)
+library(rattle)
+fancyRpartPlot(modfit_rpart$finalModel,cex = 0.7,sub="")
+valPred <- predict(modfit_rpart,newdata = validation)
+modfit_rpart
+confusionMatrix(valPred,validation$classe)
+```
+we observe that accuracy obtained with the testing data set is low. Also it is observed that the sensitivity or specificity values are not high enough to ascertain that this tree model will be good for our prediction.It might be possible to tune this model using parameters. However other models are tried before need for tuning this model.
+
+# Bagging Model 
+A Bagging  Model was created using "Bagging" model function from iPred with classe variable against the other variables as predictors. This was chosen over 'bag' from caret because of performance.
+
+```{r,message=FALSE,cache=TRUE}
+#Bagging Model
+set.seed(13141516)
+library(ipred)
+modfit_bag <- bagging(classe ~. , data = train,coob=TRUE)
+valPred_bag <- predict(modfit_bag,newdata = validation)
+modfit_bag
+confusionMatrix(valPred_bag,validation$classe)
+```
+The Out-of-bag estimate of misclassification error:  0.0128 is very low and accuracy seems very high. As noted from the model this is over 25 resampling that is done.  The results seems good. the sensitivity and specificity values is very high suggesting that our TYPE I and TYPE II errors will be low. A few more models will be evaluated before chossing a final one to run on the test data for prediction. 
+
+##Boosting Model
+The caret "gbm" boosting method was used in  order to overcome the  2 class limit posed by the boosting model from iPred. However the procedure was very slow. 
+```{r,message=FALSE,cache=TRUE,results='hide'}
+#Boosting Model
+set.seed(9101112)
+library(dplyr)
+predictors  <- subset(train , select = -classe)
+classe <- train$classe
+modfit_boost <- train(predictors ,classe, method = "gbm")
+valPred_boost <- predict(modfit_boost,newdata = validation[,colnames(predictors)])
+modfit_boost
+confusionMatrix(valPred_boost,validation$classe)
+ggplot(modfit_boost)
+```
+
+The boosting has an accuracy of around 97% . This is less than the bagging accuracy. The senitivity and specificity are lower than the bagging model. From the gragh, it can be observed that the accuracy of the model increases with that of Tree depth. From the model, the optimum model has around 150 trees.
+## Random Forest 
+A random forest model was created with the classe Variable as the outcome and rest of the variables as predictors.
+```{r,message=FALSE,cache=TRUE}
+#Random Forest
+set.seed(17181920)
+library(randomForest)
+modfit_rf <- randomForest(classe ~.,data = train,importance = TRUE)
+valPred_rf <- predict(modfit_rf,newdata = validation)
+modfit_rf
+confusionMatrix(valPred_rf,validation$classe)
+```
+
+```{r}
+par(op)
+plot(modfit_rf,main= "Random Forest accuracy plot by Trees")
+```
+
+The random forest accuracy is excellent as with the specificty and sensitivity. As seen from the graph we can observe the model is optimized between 100 to 200 trees. This is similar to the result that was observed in boosting model.
+#Comparision of Models
+```{r}
+library(randomForest)
+c(Tree = confusionMatrix(valPred,validation$classe)$overall['Accuracy'],
+  Bagging = confusionMatrix(valPred_bag,validation$classe)$overall['Accuracy'],
+  RandomForest= confusionMatrix(valPred_rf,validation$classe)$overall['Accuracy'],
+  Boosting = confusionMatrix(valPred_boost,validation$classe)$overall['Accuracy'])
+varImpPlot(modfit_rf,main="Variable Importance plot based on RF")
+```
+
+In comparing the accuracy the Bagging and Random Forest have the best accuracy followd by boosting. The basic tree model was not accurate enough. The Random Forest scored high in the performance and with other metrics like sensitivity and specificity. This comparison however is not a equal comparison since the parameters not be set equal for instance the depth of trees or the no of trees. However the premise of the challenge is to use a model that will clearly predict the outcome of the testing data set. Hence this cross validation is fair. For predicting the out come of the testing set, RandomForest model is used and results are output to a file. 
+
+#Predicting Test data values
+The predicted output is written to the "Predicted Output for Test Data.xlsx" in the working directory
+```{r}
+valPred_rf_test <- predict(modfit_rf,newdata = testing_subset)
+test_df <- data.frame(testing$problem_id,valPred_rf_test)
+library(xlsx)
+write.xlsx(test_df, "Predicted Output for Test Data.xlsx")
+```
